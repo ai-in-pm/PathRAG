@@ -60,6 +60,9 @@ PathRAG uses environment variables for API keys and configuration settings. The 
 ```bash
 python main.py
 ```
+## Output
+
+![image](https://github.com/user-attachments/assets/d47abf51-ab97-449f-b603-da30f3a40429)
 
 ## Project Structure
 
