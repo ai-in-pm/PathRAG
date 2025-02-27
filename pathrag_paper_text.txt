@@ -1,0 +1,1054 @@
+PathRAG: Pruning Graph-based Retrieval Augmented Generation with
+Relational Paths
+Boyu Chen1, Zirui Guo1,2, Zidan Yang1,3, Yuluo Chen1, Junze Chen1,
+Zhenghao Liu3,Chuan Shi1,Cheng Yang1
+1Beijing University of Posts and Telecommunications
+2University of Hong Kong3Northeastern University
+chenbys4@bupt.edu.cn,yangcheng@bupt.edu.cn
+Abstract
+Retrieval-augmented generation (RAG) im-
+proves the response quality of large language
+models (LLMs) by retrieving knowledge from
+external databases. Typical RAG approaches
+split the text database into chunks, organizing
+them in a flat structure for efficient searches. To
+better capture the inherent dependencies and
+structured relationships across the text database,
+researchers propose to organize textual infor-
+mation into an indexing graph, known as graph-
+based RAG . However, we argue that the lim-
+itation of current graph-based RAG methods
+lies in the redundancy of the retrieved informa-
+tion, rather than its insufficiency. Moreover,
+previous methods use a flat structure to orga-
+nize retrieved information within the prompts,
+leading to suboptimal performance. To over-
+come these limitations, we propose PathRAG,
+which retrieves key relational paths from the
+indexing graph, and converts these paths into
+textual form for prompting LLMs. Specifically,
+PathRAG effectively reduces redundant infor-
+mation with flow-based pruning, while guiding
+LLMs to generate more logical and coherent
+responses with path-based prompting. Experi-
+mental results show that PathRAG consistently
+outperforms state-of-the-art baselines across
+six datasets and five evaluation dimensions.
+The code is available at the following link:
+https://github.com/BUPT-GAMMA/PathRAG
+1 Introduction
+Retrieval-augmented generation (RAG) empowers
+large language models (LLMs) to access up-to-
+date or domain-specific knowledge from external
+databases, enhancing the response quality without
+additional training (Gao et al., 2022b, 2023; Fan
+et al., 2024; Procko and Ochoa, 2024). Most RAG
+approaches divide the text database into chunks,
+organizing them in a flat structure to facilitate ef-
+ficient and precise searches (Finardi et al., 2024;
+Yepes et al., 2024; Lyu et al., 2024).
+Figure 1: Comparison between different graph-based
+RAG methods. GraphRAG (Edge et al., 2024) uses all
+the information within certain communities, while Ligh-
+tRAG (Guo et al., 2024) uses all the immediate neigh-
+bors of query-related nodes. In contrast, our PathRAG
+focuses on key relational paths between query-related
+nodes to alleviate noise and reduce token consumption.
+To better capture the inherent dependencies
+and structured relationships across texts in a
+database, researchers have introduced graph-based
+RAG (Edge et al., 2024; Guo et al., 2024), which or-
+ganizes textual information into an indexing graph.
+In this graph, nodes represent entities extracted
+from the text, while edges denote the relationships
+between these entities. Traditional RAG (Liu et al.,
+2021; Yasunaga et al., 2021; Gao et al., 2022a)
+usually focuses on questions that can be answered
+with local information about a single entity or re-
+lationship. In contrast, graph-based RAG targets
+on global-level questions that need the informa-
+tion across a database to generate a summary-like
+response. For example, GraphRAG (Edge et al.,
+2024) first applies community detection on the
+graph, and then gradually summarizes the infor-
+mation in each community. The final answer is
+generated based on the most query-relevant com-
+1arXiv:2502.14902v1  [cs.CL]  18 Feb 2025
+munities. LightRAG (Guo et al., 2024) extracts
+both local and global keywords from input queries,
+and retrieves relevant nodes and edges using these
+keywords. The ego-network information of the
+retrieved nodes is then used as retrieval results.
+However, we argue that the information consid-
+ered in previous graph-based RAG methods is of-
+ten redundant, which can introduce noise, degrade
+model performance, and increase token consump-
+tion. As shown in Figure 1 (a), GraphRAG method
+uses all the information from the nodes and edges
+within certain communities. Similarly, as shown
+in Figure 1 (b), LightRAG retrieves the immedi-
+ate neighbors of query-related nodes to generate
+answers. The redundant information retrieved in
+these two methods may act as noise, and negatively
+impact the subsequent generation. Moreover, both
+methods adopt a flat structure to organize retrieved
+information in the prompts, e.g., directly concate-
+nating the textual information of all retrieved nodes
+and edges, resulting in answers with suboptimal
+logicality and coherence.
+To overcome the above limitations, we pro-
+pose PathRAG, which performs key path retrieval
+among retrieved nodes and converts these paths
+into textual form for LLM prompting. As shown in
+Figure 1 (c), we focus on the key relational paths
+between retrieved nodes to alleviate noise and re-
+duce token consumption. Specifically, we first re-
+trieve relevant nodes from the indexing graph based
+on the keywords in the query. Then we design a
+flow-based pruning algorithm with distance aware-
+ness to identify the key relational paths between
+each pair of retrieved nodes. The pruning algo-
+rithm enjoys low time complexity, and can assign a
+reliability score to each retrieved path. Afterward,
+we sequentially concatenate the node and edge in-
+formation alongside each path as textual relational
+paths. Considering the “lost in the middle” issue of
+LLMs (Liu et al., 2024), we place the textual paths
+into the prompt in ascending order of reliability
+scores for better answer generation. To evaluate
+the effectiveness of PathRAG, we follow the four
+benchmark datasets used in previous work (Qian
+et al., 2024), and additionally explore two larger
+ones. Experimental results on six datasets show
+that PathRAG generates better answers across all
+five evaluation dimensions compared to the state-
+of-the-art baselines. Compared to GraphRAG and
+LightRAG, the average win rates of PathRAG are
+60.44% and 58.46%, respectively. The advantages
+of PathRAG are more significant for larger datasets,making it better aligned with real-world applica-
+tions. The contributions of this work are as follows:
+•We highlight that the limitation of current
+graph-based RAG methods lies in the redundancy
+of the retrieved information, rather than its insuf-
+ficiency. Moreover, previous methods use a flat
+structure to organize retrieved information within
+the prompts, leading to suboptimal performance.
+•We propose PathRAG, which efficiently re-
+trieves key relational paths from an indexing graph
+with flow-based pruning, and effectively generates
+answers with path-based LLM prompting.
+•PathRAG consistently outperforms state-of-
+the-art baselines across six datasets and five eval-
+uation dimensions. Extensive experiments further
+validate the design of PathRAG.
+2 Related Work
+Text-based RAG . To improve text quality (Fang
+et al., 2024a; Xu et al., 2024; Zhu et al., 2024) and
+mitigate hallucination effects (Lewis et al., 2020;
+Guu et al., 2020), retrieval-augmented generation
+(RAG) is widely used in large language models
+(LLMs) by leveraging external databases. These
+databases primarily store data in textual form, con-
+taining a vast amount of domain knowledge that
+LLMs can directly retrieve. We refer to such sys-
+tems as text-based RAG. Based on different re-
+trieval mechanisms (Fan et al., 2024), text-based
+RAG can be broadly classified into two categories:
+sparse vector retrieval (Alon et al., 2022; Schick
+et al., 2023; Jiang et al., 2023; Cheng et al., 2024)
+anddense vector retrieval (Lewis et al., 2020;
+Hofstätter et al., 2023; Li et al., 2024a; Zhang et al.,
+2024). Sparse vector retrieval typically identifies
+the most representative words in each text segment
+by word frequency, and retrieves relevant text for
+a specific query based on keyword matching. In
+contrast, dense vector retrieval addresses issues
+like lexical mismatches and synonyms by encoding
+both query terms and text into vector embeddings.
+It then retrieves relevant content based on the simi-
+larity between these embeddings. However, most
+text-based RAG methods use a flat organization of
+text segments, and fail to capture essential relation-
+ships between chunks ( e.g., the contextual depen-
+dencies), limiting the quality of LLM-generated
+responses (Edge et al., 2024; Guo et al., 2024).
+KG-RAG . Besides text databases, researchers
+have proposed retrieving information from knowl-
+edge graphs (KGs), known as KG-RAG (Ya-
+2
+Figure 2: The overall framework of our proposed PathRAG with three main stages. 1) Node Retrieval Stage:
+Relevant nodes are retrieved from the indexing graph based on the keywords in the query; 2) Path Retrieval Stage:
+We design a flow-based pruning algorithm to extract key relational paths between each pair of retrieved nodes, and
+then retrieve paths with the highest reliability scores; 3) Answer Generation Stage: The retrieved paths are placed
+into prompts in ascending order of reliability scores, and finally fed into an LLM for answer generation.
+sunaga et al., 2021; Gao et al., 2022a; Li et al.,
+2024b; Procko and Ochoa, 2024; He et al., 2025).
+These methods can utilize existing KGs (Wen et al.,
+2023; Dehghan et al., 2024) or their optimized ver-
+sions (Fang et al., 2024b; Panda et al., 2024), and
+enable LLMs to retrieve information of relevant
+entities and their relationships. Specifically, KG-
+RAG methods typically extract a local subgraph
+from the KG (Bordes et al., 2015; Talmor and Be-
+rant, 2018; Gu et al., 2021), such as the immediate
+neighbors of the entity mentioned in a query. How-
+ever, most KG-RAG methods focus on addressing
+questions that can be answered with a single entity
+or relation in the KG (Joshi et al., 2017; Yang et al.,
+2018; Kwiatkowski et al., 2019; Ho et al., 2020),
+narrowing the scope of their applicability.
+Graph-based RAG . Instead of utilizing pre-
+constructed KGs, graph-based RAG (Edge et al.,
+2024; Guo et al., 2024) typically organizes text
+databases as text-associated graphs, and focuses
+on global-level questions that need the information
+from multiple segments across a database. The
+graph construction process often involves extract-
+ing entities from the text and identifying relation-
+ships between these entities. Also, contextual in-
+formation is included as descriptive text to mini-
+mize the information loss during the text-to-graph
+conversion. GraphRAG (Edge et al., 2024) first ap-
+plies community detection algorithms on the graph,
+and then gradually aggregates the information from
+sub-communities to form higher-level community
+information. LightRAG (Guo et al., 2024) adoptsa dual-stage retrieval framework to accelerate the
+retrieval process. First, it extracts both local and
+global keywords from the question. Then, it re-
+trieves relevant nodes and edges using these key-
+words, treating the ego-network information of the
+retrieved nodes as the final retrieval results. This
+approach simplifies the retrieval process and effec-
+tively handles global-level tasks. However, the re-
+trieved information covers all immediate neighbors
+of relevant nodes, which may introduce noise harm-
+ing the answer quality. We also notice a concurrent
+work MiniRAG (Fan et al., 2025) that leverages
+path information to assist retrieval. But they focus
+on addressing questions that can be answered by
+the information of a specific node, and thus explore
+paths between query-related and answer-related
+nodes like KG reasoning (Yasunaga et al., 2021;
+Liu et al., 2021; Tian et al., 2022). Their implemen-
+tation details such as path discovery and integration
+are also quite different from ours.
+3 Preliminaries
+In this section we will introduce and formalize the
+workflow of a graph-based RAG system.
+Instead of storing text chunks as an unordered
+collection, graph-based RAG automatically struc-
+tures a text database into an indexing graph as
+a preprocessing step. Given a text database, the
+entities and their interrelations within the textual
+content are identified by LLMs, and utilized to con-
+struct the node set Vand edge set E. Specifically,
+each node v∈ Vrepresents a distinct entity with an
+3
+identifier kv(e.g., entity name) and a textual chunk
+tv(e.g., associated text snippets), while each edge
+e∈ E represents the relationship between entity
+pairs with a descriptive textual chunk teto enrich
+relational context. We denote the indexing graph
+asG= (V,E,KV,T), where KVrepresent the col-
+lection of node identifiers and Tis the collection
+of textual chunks in the indexing graph.
+Given a query q, a graph-oriented retriever ex-
+tracts relevant nodes and edges in the indexing
+graph. Then the textual chunks of retrieved ele-
+ments are integrated with query qto obtain the
+answer by an LLM generator. The above process
+can be simplified as:
+A(q,G) =F ◦ M (q;R(q,G)), (1)
+where Adenotes the augmented generation with
+retrieval results, Rmeans the graph-oriented re-
+triever, MandFrepresent the prompt template
+and the LLM generator, respectively. In this paper,
+we primarily focus on designing a more effective
+graph-oriented retriever and the supporting prompt
+template to achieve a better graph-based RAG.
+4 Methodology
+In this section, we propose a novel graph-based
+RAG framework with the path-based retriever and
+a tailored prompt template, formally designated
+as PathRAG. As illustrated in Figure 2, the pro-
+posed framework operates on an indexing graph
+through three sequential stages: node retrieval, path
+retrieval, and answer generation.
+4.1 Node Retrieval
+In this stage, we identify keywords from the input
+query by LLMs, and accordingly extract relevant
+nodes from the indexing graph. Given a query q, an
+LLM is utilized to extract keywords from the query
+text. The collection of keywords extracted from
+query qis denoted as Kq. Based on the extracted
+keywords, dense vector matching is employed to
+retrieve related nodes in the indexing graph G. In
+dense vector matching, the relevance between a
+keyword and a node is calculated by their similar-
+ity in the semantic embedding space, where the
+commonly used cosine similarity is adopted in our
+method. Specifically, we first encode both node
+identifiers and the extracted keywords using a se-
+mantic embedding model f:Kq∪KV→ X q∪XV,
+where XV={xv}v∈Vrepresents the embeddings
+of node identifiers, and Xq={xq,i}|Kq|
+i=1denotesthe embeddings of the extracted keywords. Based
+on the obtained embeddings above, we then iterate
+overXqto search the most relevant nodes among
+XVwith the embedding similarity, until a prede-
+fined number Nof nodes is reached. The resulting
+subset of retrieved nodes is denoted as Vq⊆ V.
+4.2 Path Retrieval
+In this subsection, we introduce the path retrieval
+module that aggregates textual chunks in the form
+of relational paths to capture the connections be-
+tween retrieved nodes.
+Given two distinct retrieved nodes vstart, vend∈
+Vq, there could be many reachable paths between
+them. Since not all paths are helpful to the task,
+further refinement is needed to enhance both effec-
+tiveness and efficiency. Inspired by the resource
+allocation strategy (Lü and Zhou, 2011; Lin et al.,
+2015), we propose a flow-based pruning algorithm
+with distance awareness to extract key paths.
+Formally, we denote the sets of nodes pointing to
+viand nodes pointed by viasN(vi,·)andN(·, vi),
+respectively. We define the resource of node vias
+S(vi). We set S(vstart) = 1 and initialize other re-
+sources to 0, followed by propagating the resources
+through the neighborhood. The resource flowing to
+viis defined as:
+S(vi) =X
+vj∈N(·,vi)α· S(vj)
+|N(vj,·)|, (2)
+where αrepresents the decay rate of information
+propagation along the edges. Based on the assump-
+tion that the closer two nodes are in the indexing
+graph, the stronger their connection will be, we
+introduce this penalty mechanism to enable the
+retriever to perceive distance. It is crucial to em-
+phasize that our approach differs from strictly sort-
+ing paths with a limited number of hops. Detailed
+comparative experiments will be presented in sub-
+sequent sections.
+Notably, due to the decay penalty and neighbor
+allocation, nodes located far from the initial node
+are assigned with negligible resources. Therefore,
+we introduce an early stopping strategy to prune
+paths in advance when
+S(vi)
+|N(vi,·)|< θ, (3)
+where θis the pruning threshold. This ensures
+that the algorithm terminates early for nodes that
+contribute minimally to the overall propagation.
+4
+For efficiency concerns, we update the resource of
+a node at most once.
+We denote each path as an ordered sequence
+P=v0e0− → ··· viei− → ··· = (VP,EP), where vi
+andeirepresent the i-th node and directed edge,
+andVPandEPrepresent the set of nodes and edges
+in the path P, respectively. For each path P=
+(VP,EP), we calculate the average resource values
+flowing through its edges as the measurement of
+reliability, which can be formulated as:
+S(P) =1
+|EP|X
+vi∈VPS(vi), (4)
+where|EP|is the number of edges in the path. Then,
+we sort these paths based on the reliability S(P)
+and retain only the most reliable relational paths
+for this node pair. These paths are added to the
+global candidate pool in the form of path-reliability
+pair(P,S(P)). We repeat the above process for
+each distinct node pair, ultimately obtaining all
+candidate paths. Then the top- Kreliable paths can
+be obtained from the candidate pool to serve as
+the retrieval information of query qfor subsequent
+generation, which we denote as Pq.
+4.3 Answer Generation
+For better answer generation, we establish path
+prioritization based on their reliability, then strate-
+gically position these paths to align with LLMs’
+performance patterns (Qin et al., 2023; Liu et al.,
+2024; Cuconasu et al., 2024).
+Formally, for each retrieved relational path, we
+concatenate the textual chunks of all nodes and
+edges within the path to obtain a textual relational
+path, which can be formulated as:
+tP= concat([ ···;tvi;tei;tvi+1;···]),(5)
+where concat( ·)denotes the concatenation opera-
+tion,viandeiare the i-th node and edge in the path
+P, respectively.
+Considering the “lost in the middle” issue (Liu
+et al., 2024; Cao et al., 2024; Firooz et al., 2024)
+for LLMs in long-context scenarios, directly aggre-
+gating the query with different relational paths may
+lead to suboptimal results. Therefore, we position
+the most critical information at the two ends of the
+template, which is regarded as the golden memory
+region for LLM comprehension. Specifically, we
+place the query at the beginning of the template and
+organize the textual relational paths in a reliabilityascending order, ensuring that the most reliable re-
+lational path is positioned at the end of the template.
+The final prompt can be denoted as:
+M(q;R(q,G)) = concat([ q;tPK;···;tP1]),
+(6)
+where P1is the most reliable path and PKis the K-
+th reliable path. This simple prompting strategy can
+significantly improve the response performance of
+LLM compared with placing the paths in a random
+or reliability ascending order in our experiments.
+4.4 Discussion
+Complexity Analysis of Path Retrieval. After the
+i-th step of resource propagation, there are at most
+αi
+θnodes alive due to the decay penalty and early
+stopping. Hence the total number of nodes involved
+in this propagation is at mostP∞
+i=0αi/θ=1
+(1−α)θ.
+Thus the complexity of extracting candidate paths
+between all node pairs is O(N2
+(1−α)θ). In our set-
+tings, the number of retrieved nodes N∈[10,60]
+is much less than the total number of nodes in the
+indexing graph |V| ∼ 104. Thus the time complex-
+ity is completely acceptable.
+Necessity of Path-based Prompting. Note that
+different retrieved paths may have shared nodes or
+edges. To reduce the prompt length, it is possible
+to flatten the paths and remove duplications as a set
+of nodes and edges. However, this conversion will
+lose the semantic relations between the two end-
+points of each path. We also validate the necessity
+of path-based prompting in the experiments.
+5 Experiments
+We conduct extensive experiments to answer the
+following research questions ( RQs ):RQ1: How
+effective is our proposed PathRAG compared to
+the state-of-the-art baselines? RQ2: How do dif-
+ferent values of key hyperparameters influence the
+method’s performance? RQ3: Has each compo-
+nent of our framework played its role effectively?
+RQ4: How much token cost does PathRAG re-
+quire to achieve the performance of other base-
+lines? RQ5: Do the RAG response and its evalua-
+tion of PathRAG offer some interpretability?
+5.1 Experimental Setup
+5.1.1 Datasets
+We follow the settings of LightRAG (Guo et al.,
+2024) and evaluate our model using the UltraDo-
+main benchmark (Qian et al., 2024). The UltraDo-
+main data is sourced from 428 college textbooks
+5
+Table 1: Performance across six datasets and five evaluation dimensions in terms of win rates.Agriculture Legal History CS Biology Mix
+NaiveRAG PathRAG NaiveRAG PathRAG NaiveRAG PathRAG NaiveRAG PathRAG NaiveRAG PathRAG NaiveRAG PathRAG
+Comprehensiveness 37.60% 62.40% 31.45% 68.55% 33.87% 66.13% 39.52% 60.48% 35.48% 64.52% 41.60% 58.40%
+Diversity 32.26% 67.74% 24.39% 75.61% 36.29% 63.71% 42.40% 57.60% 41.13% 58.87% 33.06% 66.94%
+Logicality 35.48% 64.52% 35.20% 64.80% 43.55% 56.45% 36.29% 63.71% 44.35% 55.65% 43.20% 56.80%
+Relevance 40.80% 59.20% 26.61% 73.39% 42.40% 57.60% 37.39% 62.61% 34.67% 65.33% 41.94% 58.06%
+Coherence 38.21% 61.79% 33.06% 66.94% 44.00% 56.00% 38.71% 61.29% 34.68% 65.32% 37.60% 62.40%
+HyDE PathRAG HyDE PathRAG HyDE PathRAG HyDE PathRAG HyDE PathRAG HyDE PathRAG
+Comprehensiveness 38.02% 61.98% 38.40% 61.60% 34.68% 65.32% 40.80% 59.20% 33.06% 66.94% 42.74% 57.26%
+Diversity 36.29% 63.71% 21.60% 78.40% 34.68% 65.32% 39.52% 60.48% 36.00% 64.00% 33.87% 66.13%
+Logicality 44.00% 56.00% 30.33% 69.67% 38.21% 61.79% 38.71% 61.29% 45.08% 54.92% 45.53% 54.47%
+Relevance 39.34% 60.66% 35.48% 64.52% 35.77% 64.23% 37.39% 62.61% 46.34% 53.66% 43.55% 56.45%
+Coherence 41.46% 58.54% 41.94% 58.06% 40.32% 59.68% 37.60% 62.40% 41.94% 58.06% 45.60% 54.40%
+GraphRAG PathRAG GraphRAG PathRAG GraphRAG PathRAG GraphRAG PathRAG GraphRAG PathRAG GraphRAG PathRAG
+Comprehensiveness 44.72% 55.28% 33.87% 66.13% 41.13% 58.87% 37.60% 62.40% 39.52% 60.48% 41.13% 58.87%
+Diversity 45.97% 54.03% 29.84% 70.16% 36.59% 63.41% 42.74% 57.26% 38.21% 61.79% 36.29% 63.71%
+Logicality 32.52% 67.48% 41.60% 58.40% 43.55% 56.45% 37.39% 62.61% 34.45% 65.55% 41.94% 58.06%
+Relevance 43.09% 56.91% 40.65% 59.35% 43.55% 56.45% 34.68% 65.32% 42.28% 57.72% 40.32% 59.68%
+Coherence 41.13% 58.87% 38.21% 61.79% 40.80% 59.20% 38.02% 61.98% 43.55% 56.45% 41.60% 58.40%
+LightRAG PathRAG LightRAG PathRAG LightRAG PathRAG LightRAG PathRAG LightRAG PathRAG LightRAG PathRAG
+Comprehensiveness 41.94% 58.06% 36.29% 63.71% 42.74% 57.26% 43.20% 56.80% 44.72% 55.28% 44.80% 55.20%
+Diversity 41.46% 58.54% 36.49% 63.51% 43.90% 56.10% 45.16% 54.84% 43.09% 56.91% 42.74% 57.26%
+Logicality 43.09% 56.91% 39.84% 60.16% 38.71% 61.29% 44.72% 55.28% 45.60% 54.40% 41.94% 58.06%
+Relevance 39.20% 60.80% 37.81% 62.19% 41.13% 58.87% 41.46% 58.54% 42.28% 57.72% 40.65% 59.35%
+Coherence 40.80% 59.20% 36.29% 63.71% 41.46% 58.54% 41.60% 58.40% 43.55% 56.45% 39.52% 60.48%across 18 distinct domains. Besides the four do-
+mains used in LightRAG’s evaluation (Agriculture,
+Legal, Computer Science, and Mix), we extend
+two more domains (History and Biology), and con-
+sider six datasets in total. The token counts of
+the six datasets range from 600,000to5,000,000.
+We also follow the standardized process from
+GraphRAG and LightRAG for dataset preprocess-
+ing. Detailed information about the datasets can be
+found in the Appendix A.
+5.1.2 Baselines
+We compare PathRAG with four state-of-the-art
+methods: NaiveRAG (Gao et al., 2023), HyDE
+(Gao et al., 2022b), GraphRAG (Edge et al., 2024),
+and LightRAG (Guo et al., 2024). These meth-
+ods cover cutting-edge text-based and graph-based
+RAG approaches. Detailed descriptions of the base-
+lines can be found in the Appendix B.
+5.1.3 Implementation Details
+To ensure fairness and consistency across exper-
+iments, we uniformly use “GPT-4o-mini” for all
+LLM-related components across both the baseline
+methods and our approach. Also, the indexing
+graphs for different graph-based RAG methods
+are the same as GraphRAG (Edge et al., 2024).
+Retrieved edges that correspond to global key-
+words of LightRAG are placed after the query.
+For the key hyperparameters of PathRAG, the
+number of retrieval nodes Nis selected from
+{10,20,30,40,50,60}, the number of paths K
+is varied within {5,10,15,20,25}, the decay rate
+αis chosen from {0.6,0.7,0.8,0.9,1.0}, and thethreshold θis fixed as 0.05.
+5.1.4 Evaluation Metrics
+Due to the absence of ground truth answers, we
+follow the LLM-based evaluation procedures as
+GraphRAG and LightRAG. Specifically, we uti-
+lize “GPT-4o-mini” to evaluate the generated an-
+swers across multiple dimensions. The evaluation
+dimensions are based on those from GraphRAG
+and LightRAG, including Comprehensiveness and
+Diversity, while also incorporating three new di-
+mensions from recent advances in LLM-based eval-
+uation (Chan et al., 2023), namely Logicality, Rel-
+evance, and Coherence. We compare the answers
+generated by each baseline and our method and con-
+duct win-rate statistics. A higher win rate indicates
+a greater performance advantage over the other.
+Note that the presentation order of two answers
+will be alternated, and the average win rates will be
+reported. Detailed descriptions of these evaluation
+dimensions can be found in Appendix C.
+5.2 Main Results (RQ1)
+As shown in Table 1, PathRAG consistently out-
+performs the baselines across all evaluation di-
+mensions and datasets .
+From the perspective of evaluation dimensions,
+compared to all baselines, PathRAG shows an av-
+erage win rate of 60.88% in Comprehensiveness,
+62.75% in Diversity, 59.78% in Logicality, 60.47%
+in Relevance, and 59.93% in Coherence on average.
+These advantages highlight the effectiveness of our
+proposed path-based retrieval, which contributes to
+better performance across multiple aspects of the
+6
+Figure 3: Impact of three hyperparameters in PathRAG on the Legal dataset.
+Table 2: Ablation study on the path retrieval algorithm of PathRAG.Agriculture Legal History CS Biology Mix
+Random Flow-based Random Flow-based Random Flow-based Random Flow-based Random Flow-based Random Flow-based
+Comprehensiveness 44.80% 55.20% 46.77% 53.23% 45.97% 54.03% 38.40% 61.60% 44.00% 56.00% 42.74% 57.26%
+Diversity 38.40% 61.60% 49.19% 50.81% 31.45% 68.55% 37.70% 62.30% 29.84% 70.16% 47.58% 52.42%
+Logicality 47.97% 52.03% 46.77% 53.23% 44.00% 56.00% 44.63% 55.37% 41.94% 58.06% 46.40% 53.60%
+Relevance 45.45% 54.55% 44.80% 55.20% 45.97% 54.03% 41.46% 58.54% 45.83% 54.17% 48.39% 51.61%
+Coherence 44.35% 55.65% 44.60% 55.40% 40.98% 59.02% 38.40% 61.60% 41.46% 58.54% 47.15% 52.85%
+Hop-first Flow-based Hop-first Flow-based Hop-first Flow-based Hop-first Flow-based Hop-first Flow-based Hop-first Flow-based
+Comprehensiveness 48.78% 51.22% 44.35% 55.65% 45.83% 54.17% 47.15% 52.85% 48.80% 51.20% 43.20% 56.80%
+Diversity 42.98% 57.02% 36.00% 64.00% 49.59% 50.41% 43.55% 56.45% 45.97% 54.03% 47.58% 52.42%
+Logicality 47.58% 52.42% 45.16% 54.84% 41.13% 58.87% 40.80% 59.20% 44.80% 55.20% 43.44% 56.56%
+Relevance 44.72% 55.28% 43.44% 56.56% 45.97% 54.03% 41.46% 58.54% 37.40% 62.60% 41.46% 58.54%
+Coherence 39.34% 60.66% 41.13% 58.87% 39.84% 60.16% 48.80% 51.20% 42.74% 57.26% 44.72% 55.28%generated responses. From the dataset perspective,
+PathRAG has a win rate of 60.13% in Agriculture,
+60.26% in CS and 59.02% in Mix on average. For
+the larger three datasets, PathRAG shows greater
+advantages, with an average win rate of 65.53%
+in Legal, 60.13% in History and 59.50% in Biol-
+ogy. This indicates that our proposed PathRAG
+effectively reduces the impact of irrelevant infor-
+mation when handling larger datasets, making it
+more aligned with real-world applications and of-
+fering stronger practical significance compared to
+existing RAG baselines.
+5.3 Hyperparameter Analysis (RQ2)
+We adjust one hyperparameter at a time on the
+Legal dataset, and then calculate the win rates com-
+pared with LightRAG, the best baseline.
+Number of retrieved nodes ( N). As shown on
+the left side of Figure 3, we observe that as N
+increases, the average win rate gradually improves,
+peaking at N= 40 , followed by a slight decline.
+This is because the retrieved path information
+becomes increasingly sufficient as the number of
+nodes grows. However, as Ncontinues to increase,
+the retrieved nodes are less relevant to the question
+and negatively impact the performance.
+Number of retrieved paths ( K). As shown in
+the middle of Figure 3,
+we observe that as Kincreases, the average win
+rate reaches its peak at K= 15 . When K= 25 ,
+the average win rate drops, meaning that additionalretrieved paths can not bring further improvement
+to the model. In practice, larger datasets prefer
+larger values of K.
+Decay rate α. As shown on the right side of
+Figure 3, when α= 0.6, the pruning algorithm
+prioritizes shorter paths, resulting in an average
+win rate of only 0.57. Asαincreases, the average
+win rate peaks at 0.63when α= 0.8, but then
+begins to decline. At α= 1.0, where the decay
+rate is completely ignored, the average win rate
+significantly drops. This suggests that prioritizing
+shorter paths with a proper αserves as effective
+prior knowledge for the pruning process.
+5.4 Ablation Study (RQ3)
+We conduct ablation experiments to validate the
+design of PathRAG. A detailed introduction to the
+variants can be found in Appendix D.
+Necessity of path ordering . We consider two
+different strategies to rank the retrieved paths in the
+prompt, namely random and hop-first. As shown
+in the Table 2, the average win rates of PathRAG
+compared to the random and hop-first variants are
+respectively 56.75% and 56.08%, indicating the
+necessity of path ordering in the prompts.
+Necessity of path-based prompting . While
+retrieval is conducted using paths, the retrieved in-
+formation in the prompts does not necessarily need
+to be organized in the same manner. To assess the
+necessity of path-based organization, we compare
+prompts structured by paths with those using a flat
+7
+Table 3: Ablation study on the prompt format of PathRAG.Agriculture Legal History CS Biology Mix
+Flat Path-based Flat Path-based Flat Path-based Flat Path-based Flat Path-based Flat Path-based
+Comprehensiveness 45.60% 54.40% 39.52% 60.48% 48.80% 51.20% 41.13% 58.87% 45.53% 54.47% 49.59% 50.41%
+Diversity 44.72% 55.28% 41.94% 58.06% 39.52% 60.48% 40.80% 59.20% 44.35% 55.65% 43.09% 56.91%
+Logicality 46.40% 53.60% 37.19% 62.81% 45.53% 54.47% 43.55% 56.45% 47.97% 52.03% 41.94% 58.06%
+Relevance 39.52% 60.48% 44.72% 55.28% 48.39% 51.61% 44.35% 55.65% 47.58% 52.42% 44.80% 55.20%
+Coherence 41.13% 58.87% 39.20% 60.80% 45.60% 54.40% 46.34% 53.66% 44.72% 55.28% 42.28% 57.72%
+Figure 4: Case study comparing the answers generated by PathRAG and the best baseline LightRAG.
+organization. As shown in Table 3, path-based
+prompts achieve an average win rate of 56.14%,
+outperforming the flat format. In PathRAG, node
+and edge information within a path is inherently
+interconnected, and separating them can result in
+information loss. Therefore, after path retrieval,
+prompts should remain structured to preserve con-
+textual relationships and enhance answer quality.
+5.5 Token Cost Analysis (RQ4)
+For a fair comparison focusing on token consump-
+tion, we also consider a lightweight version of
+PathRAG with N= 20 andK= 5, dubbed as
+PathRAG-lt. PathRAG-lt performs on par with
+LightRAG in overall performance, achieving an av-
+erage win rate of 50.69%. The average token con-
+sumptions per question for LightRAG, PathRAG
+and PathRAG-lt are 15,837,13,318and8,869, re-
+spectively. Hence PathRAG reduces 16% token
+cost with much better performance, and the corre-
+sponding monetary cost is only 0.002$ . PathRAG-
+lt reduces 44% tokens while maintaining com-
+parable performance to LightRAG. These results
+demonstrate the token efficiency of our method.5.6 Case Study (RQ5)
+To provide a more intuitive demonstration of the
+evaluation process, we present a case study from
+the Agriculture dataset. Given the same question,
+both LightRAG and PathRAG generate responses
+based on the retrieved text. The responses are
+then evaluated by GPT-4o-mini across five dimen-
+sions, with justifications provided, as shown in Fig-
+ure 4. We highlight the key points in the answers
+in bold, with LLM justification for winning judg-
+ments displayed in blue and losing judgments in
+purple. The case study demonstrates that our pro-
+posed PathRAG provides comprehensive support
+for answer generation, with clear advantages in all
+five dimensions.
+6 Conclusion
+In this paper, we propose PathRAG, a novel graph-
+based RAG method that focuses on retrieving key
+relational paths from the indexing graph to alle-
+viate noise. PathRAG can efficiently identify key
+paths with a flow-based pruning algorithm, and ef-
+fectively generate answers with path-based LLM
+prompting. Experimental results demonstrate that
+PathRAG consistently outperforms baseline meth-
+ods on six datasets. In future work, we will opti-
+8
+mize the indexing graph construction process, and
+consider to collect more human-annotated datasets
+for graph-based RAG. It is also possible to explore
+other substructures besides paths.
+7 Limitations
+This work focuses on how to retrieve relevant in-
+formation from an indexing graph for answering
+questions. For a fair comparison with previous
+methods, the indexing graph construction process
+is not explored. Also, we prioritize simplicity in
+our proposed PathRAG, and thus the path retrieval
+algorithm involves no deep neural networks or pa-
+rameter training, which may limit the performance.
+Besides, we follow the evaluation protocol of pre-
+vious graph-based RAG methods, and the metrics
+are relative rather than absolute. We will consider
+to collect more datasets and design new metrics for
+graph-based RAG in future work.
+References
+Uri Alon, Frank Xu, Junxian He, Sudipta Sengupta, Dan
+Roth, and Graham Neubig. 2022. Neuro-symbolic
+language modeling with automaton-augmented re-
+trieval. In International Conference on Machine
+Learning , pages 468–485. PMLR.
+Antoine Bordes, Nicolas Usunier, Sumit Chopra, and
+Jason Weston. 2015. Large-scale simple question
+answering with memory networks. arXiv preprint
+arXiv:1506.02075 .
+Yukun Cao, Shuo Han, Zengyi Gao, Zezhong Ding,
+Xike Xie, and S Kevin Zhou. 2024. Graphin-
+sight: Unlocking insights in large language models
+for graph structure understanding. arXiv preprint
+arXiv:2409.03258 .
+Chi-Min Chan, Weize Chen, Yusheng Su, Jianxuan Yu,
+Wei Xue, Shanghang Zhang, Jie Fu, and Zhiyuan
+Liu. 2023. Chateval: Towards better llm-based eval-
+uators through multi-agent debate. arXiv preprint
+arXiv:2308.07201 .
+Xin Cheng, Di Luo, Xiuying Chen, Lemao Liu,
+Dongyan Zhao, and Rui Yan. 2024. Lift yourself
+up: Retrieval-augmented text generation with self-
+memory. Advances in Neural Information Processing
+Systems , 36.
+Florin Cuconasu, Giovanni Trappolini, Federico Sicil-
+iano, Simone Filice, Cesare Campagnano, Yoelle
+Maarek, Nicola Tonellotto, and Fabrizio Silvestri.
+2024. The power of noise: Redefining retrieval for
+rag systems. In Proceedings of the 47th International
+ACM SIGIR Conference on Research and Develop-
+ment in Information Retrieval , pages 719–729.Mohammad Dehghan, Mohammad Ali Alomrani, Sun-
+yam Bagga, David Alfonso-Hermelo, Khalil Bibi,
+Abbas Ghaddar, Yingxue Zhang, Xiaoguang Li,
+Jianye Hao, Qun Liu, et al. 2024. Ewek-qa: En-
+hanced web and efficient knowledge graph retrieval
+for citation-based question answering systems. arXiv
+preprint arXiv:2406.10393 .
+Darren Edge, Ha Trinh, Newman Cheng, Joshua
+Bradley, Alex Chao, Apurva Mody, Steven Truitt,
+and Jonathan Larson. 2024. From local to global: A
+graph rag approach to query-focused summarization.
+arXiv preprint arXiv:2404.16130 .
+Tianyu Fan, Jingyuan Wang, Xubin Ren, and Chao
+Huang. 2025. Minirag: Towards extremely sim-
+ple retrieval-augmented generation. arXiv preprint
+arXiv:2501.06713 .
+Wenqi Fan, Yujuan Ding, Liangbo Ning, Shijie Wang,
+Hengyun Li, Dawei Yin, Tat-Seng Chua, and Qing
+Li. 2024. A survey on rag meeting llms: Towards
+retrieval-augmented large language models. In Pro-
+ceedings of the 30th ACM SIGKDD Conference on
+Knowledge Discovery and Data Mining , pages 6491–
+6501.
+Feiteng Fang, Yuelin Bai, Shiwen Ni, Min Yang, Xiao-
+jun Chen, and Ruifeng Xu. 2024a. Enhancing noise
+robustness of retrieval-augmented language models
+with adaptive adversarial training. arXiv preprint
+arXiv:2405.20978 .
+Jinyuan Fang, Zaiqiao Meng, and Craig Macdonald.
+2024b. Reano: Optimising retrieval-augmented
+reader models through knowledge graph generation.
+InProceedings of the 62nd Annual Meeting of the
+Association for Computational Linguistics (Volume
+1: Long Papers) , pages 2094–2112.
+Paulo Finardi, Leonardo Avila, Rodrigo Castaldoni, Pe-
+dro Gengo, Celio Larcher, Marcos Piau, Pablo Costa,
+and Vinicius Caridá. 2024. The chronicles of rag:
+The retriever, the chunk and the generator. arXiv
+preprint arXiv:2401.07883 .
+Hamed Firooz, Maziar Sanjabi, Wenlong Jiang, and
+Xiaoling Zhai. 2024. Lost-in-distance: Impact of
+contextual proximity on llm performance in graph
+tasks. arXiv preprint arXiv:2410.01985 .
+Hanning Gao, Lingfei Wu, Po Hu, Zhihua Wei, Fangli
+Xu, and Bo Long. 2022a. Graph-augmented learning
+to rank for querying large-scale knowledge graph.
+AACL 2022 .
+Luyu Gao, Xueguang Ma, Jimmy Lin, and Jamie Callan.
+2022b. Precise zero-shot dense retrieval without rele-
+vance labels. arXiv preprint arXiv:2212.10496 .
+Yunfan Gao, Yun Xiong, Xinyu Gao, Kangxiang Jia,
+Jinliu Pan, Yuxi Bi, Yi Dai, Jiawei Sun, and Haofen
+Wang. 2023. Retrieval-augmented generation for
+large language models: A survey. arXiv preprint
+arXiv:2312.10997 .
+9
+Yu Gu, Sue Kase, Michelle Vanni, Brian Sadler, Percy
+Liang, Xifeng Yan, and Yu Su. 2021. Beyond iid:
+three levels of generalization for question answering
+on knowledge bases. In Proceedings of the Web
+Conference 2021 , pages 3477–3488.
+Zirui Guo, Lianghao Xia, Yanhua Yu, Tu Ao, and Chao
+Huang. 2024. Lightrag: Simple and fast retrieval-
+augmented generation.
+Kelvin Guu, Kenton Lee, Zora Tung, Panupong Pasu-
+pat, and Mingwei Chang. 2020. Retrieval augmented
+language model pre-training. In International confer-
+ence on machine learning , pages 3929–3938. PMLR.
+Xiaoxin He, Yijun Tian, Yifei Sun, Nitesh Chawla,
+Thomas Laurent, Yann LeCun, Xavier Bresson, and
+Bryan Hooi. 2025. G-retriever: Retrieval-augmented
+generation for textual graph understanding and ques-
+tion answering. Advances in Neural Information
+Processing Systems , 37:132876–132907.
+Xanh Ho, Anh-Khoa Duong Nguyen, Saku Sugawara,
+and Akiko Aizawa. 2020. Constructing a multi-hop
+qa dataset for comprehensive evaluation of reasoning
+steps. COLING 2020 .
+Sebastian Hofstätter, Jiecao Chen, Karthik Raman, and
+Hamed Zamani. 2023. Fid-light: Efficient and effec-
+tive retrieval-augmented text generation. In Proceed-
+ings of the 46th International ACM SIGIR Confer-
+ence on Research and Development in Information
+Retrieval , pages 1437–1447.
+Zhengbao Jiang, Frank F Xu, Luyu Gao, Zhiqing Sun,
+Qian Liu, Jane Dwivedi-Yu, Yiming Yang, Jamie
+Callan, and Graham Neubig. 2023. Active retrieval
+augmented generation. EMNLP 2023 .
+Mandar Joshi, Eunsol Choi, Daniel S Weld, and Luke
+Zettlemoyer. 2017. Triviaqa: A large scale distantly
+supervised challenge dataset for reading comprehen-
+sion. arXiv preprint arXiv:1705.03551 .
+Tom Kwiatkowski, Jennimaria Palomaki, Olivia Red-
+field, Michael Collins, Ankur Parikh, Chris Alberti,
+Danielle Epstein, Illia Polosukhin, Jacob Devlin, Ken-
+ton Lee, et al. 2019. Natural questions: a benchmark
+for question answering research. Transactions of the
+Association for Computational Linguistics , 7:453–
+466.
+Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio
+Petroni, Vladimir Karpukhin, Naman Goyal, Hein-
+rich Küttler, Mike Lewis, Wen-tau Yih, Tim Rock-
+täschel, et al. 2020. Retrieval-augmented generation
+for knowledge-intensive nlp tasks. Advances in Neu-
+ral Information Processing Systems , 33:9459–9474.
+Chaofan Li, Zheng Liu, Shitao Xiao, Yingxia Shao, and
+Defu Lian. 2024a. Llama2vec: Unsupervised adap-
+tation of large language models for dense retrieval.
+InProceedings of the 62nd Annual Meeting of the
+Association for Computational Linguistics (Volume
+1: Long Papers) , pages 3490–3500.Mufei Li, Siqi Miao, and Pan Li. 2024b. Simple is effec-
+tive: The roles of graphs and large language models
+in knowledge-graph-based retrieval-augmented gen-
+eration. ICLR 2025 .
+Yankai Lin, Zhiyuan Liu, Huanbo Luan, Maosong Sun,
+Siwei Rao, and Song Liu. 2015. Modeling relation
+paths for representation learning of knowledge bases.
+arXiv preprint arXiv:1506.00379 .
+Nelson F Liu, Kevin Lin, John Hewitt, Ashwin Paran-
+jape, Michele Bevilacqua, Fabio Petroni, and Percy
+Liang. 2024. Lost in the middle: How language mod-
+els use long contexts. Transactions of the Association
+for Computational Linguistics , 12:157–173.
+Ye Liu, Yao Wan, Lifang He, Hao Peng, and S Yu Philip.
+2021. Kg-bart: Knowledge graph-augmented bart
+for generative commonsense reasoning. In Proceed-
+ings of the AAAI conference on artificial intelligence ,
+volume 35, pages 6418–6425.
+Linyuan Lü and Tao Zhou. 2011. Link prediction in
+complex networks: A survey. Physica A: statistical
+mechanics and its applications , 390(6):1150–1170.
+Yuanjie Lyu, Zhiyu Li, Simin Niu, Feiyu Xiong,
+Bo Tang, Wenjin Wang, Hao Wu, Huanyong Liu,
+Tong Xu, and Enhong Chen. 2024. Crud-rag:
+A comprehensive chinese benchmark for retrieval-
+augmented generation of large language models.
+ACM Transactions on Information Systems .
+Pranoy Panda, Ankush Agarwal, Chaitanya Devagup-
+tapu, Manohar Kaul, et al. 2024. Holmes: Hyper-
+relational knowledge graphs for multi-hop question
+answering using llms. ACL 2024 .
+Tyler Thomas Procko and Omar Ochoa. 2024. Graph
+retrieval-augmented generation for large language
+models: A survey. In 2024 Conference on AI, Sci-
+ence, Engineering, and Technology (AIxSET) , pages
+166–169. IEEE.
+Hongjin Qian, Peitian Zhang, Zheng Liu, Kelong Mao,
+and Zhicheng Dou. 2024. Memorag: Moving to-
+wards next-gen rag via memory-inspired knowledge
+discovery. arXiv preprint arXiv:2409.05591 .
+Zhen Qin, Rolf Jagerman, Kai Hui, Honglei Zhuang,
+Junru Wu, Le Yan, Jiaming Shen, Tianqi Liu, Jialu
+Liu, Donald Metzler, et al. 2023. Large language
+models are effective text rankers with pairwise rank-
+ing prompting. NAACL 2024 .
+Timo Schick, Jane Dwivedi-Yu, Roberto Dessì, Roberta
+Raileanu, Maria Lomeli, Eric Hambro, Luke Zettle-
+moyer, Nicola Cancedda, and Thomas Scialom. 2023.
+Toolformer: Language models can teach themselves
+to use tools. Advances in Neural Information Pro-
+cessing Systems , 36:68539–68551.
+Alon Talmor and Jonathan Berant. 2018. The web as
+a knowledge-base for answering complex questions.
+NAACL 2018 .
+10
+Ling Tian, Xue Zhou, Yan-Ping Wu, Wang-Tao Zhou,
+Jin-Hao Zhang, and Tian-Shu Zhang. 2022. Knowl-
+edge graph and knowledge reasoning: A systematic
+review. Journal of Electronic Science and Technol-
+ogy, 20(2):100159.
+Yilin Wen, Zifeng Wang, and Jimeng Sun. 2023.
+Mindmap: Knowledge graph prompting sparks graph
+of thoughts in large language models. arXiv preprint
+arXiv:2308.09729 .
+Shicheng Xu, Liang Pang, Mo Yu, Fandong Meng,
+Huawei Shen, Xueqi Cheng, and Jie Zhou. 2024. Un-
+supervised information refinement training of large
+language models for retrieval-augmented generation.
+ACL 2024 .
+Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Ben-
+gio, William W Cohen, Ruslan Salakhutdinov, and
+Christopher D Manning. 2018. Hotpotqa: A dataset
+for diverse, explainable multi-hop question answer-
+ing. EMNLP 2018 .
+Michihiro Yasunaga, Hongyu Ren, Antoine Bosselut,
+Percy Liang, and Jure Leskovec. 2021. Qa-gnn: Rea-
+soning with language models and knowledge graphs
+for question answering. NAACL 2021 .
+Antonio Jimeno Yepes, Yao You, Jan Milczek, Sebas-
+tian Laverde, and Renyu Li. 2024. Financial report
+chunking for effective retrieval augmented genera-
+tion. arXiv preprint arXiv:2402.05131 .
+Lingxi Zhang, Yue Yu, Kuan Wang, and Chao Zhang.
+2024. Arl2: Aligning retrievers for black-box large
+language models via self-guided adaptive relevance
+labeling. ACL 2024 .
+Kun Zhu, Xiaocheng Feng, Xiyuan Du, Yuxuan Gu,
+Weijiang Yu, Haotian Wang, Qianglong Chen, Zheng
+Chu, Jingchang Chen, and Bing Qin. 2024. An in-
+formation bottleneck perspective for effective noise
+filtering on retrieval-augmented generation. ACL
+2024 .A Dataset Descriptions
+We conduct experiments on the following six
+datasets, and the statistics of each dataset and cor-
+responding indexing graph are shown in Table 4.
+•Agriculture dataset: This dataset focuses on
+the agricultural domain, covering various aspects
+of agricultural practices, such as beekeeping, crop
+cultivation, and farm management.
+•Legal dataset: This dataset focuses on the legal
+domain, covering various aspects of legal practices,
+such as case law, legal regulations, and judicial
+procedures.
+•History dataset: This dataset focuses on the
+field of history, covering various periods, events,
+and figures throughout time. It includes histori-
+cal texts, articles, and documents related to world
+history, significant historical movements, and im-
+portant historical figures from different regions and
+cultures.
+•CS dataset: This dataset focuses on the field
+of computer science, covering multiple subfields
+such as algorithms, data structures, artificial intelli-
+gence, machine learning, and computer networks.
+It particularly provides various practical applica-
+tion examples in the areas of machine learning and
+big data.
+•Biology dataset: This dataset focuses on the
+field of biology, covering a wide range of topics
+such as plants, animals, insects, and more. It pro-
+vides detailed information about the physical char-
+acteristics, behaviors, ecosystems, and other as-
+pects of various organisms.
+•Mix dataset: This dataset contains a variety
+of literary classics, including essays, poetry, and
+biographies, covering multiple fields such as phi-
+losophy, history, and literature.
+B Baseline Descriptions
+The detailed baseline descriptions are as follows:
+•NaiveRAG : This method is mainly used for
+retrieving information from text databases by split-
+ting the text into chunks for storage. During the
+storage process, the chunks are embedded using
+text embeddings. For a query, the question is con-
+verted into a text embedding, and retrieval is per-
+formed based on maximum similarity between the
+query embedding and the text chunks, enabling
+efficient and direct access to answers.
+•HyDE : This model shares a similar storage
+framework with NaiveRAG. However, during the
+11
+Table 4: Dataset statistics.
+Datasets Agriculture Legal History CS Biology Mix
+Number of documents 12 94 26 10 27 61
+Number of tokens 1,923,163 4,719,555 5,088,196 2,039,199 3,234,487 602,537
+Number of nodes in the indexing graph 22,973 20,772 63,051 20,286 41,968 10,657
+Table 5: Comparison between PathRAG-lt and LightRAG in terms of win rates.Agriculture Legal History CS Biology Mix
+LightRAG PathRAG-lt LightRAG PathRAG-lt LightRAG PathRAG-lt LightRAG PathRAG-lt LightRAG PathRAG-lt LightRAG PathRAG-lt
+Comprehensiveness 56.45% 43.55% 47.58% 52.42% 57.72% 42.28% 52.89% 47.11% 49.60% 50.40% 41.46% 58.54%
+Diversity 52.00% 48.00% 56.10% 43.90% 54.03% 45.97% 48.80% 51.20% 52.89% 47.11% 52.42% 47.58%
+Logicality 45.16% 54.84% 43.09% 56.91% 48.80% 51.20% 45.60% 54.40% 48.78% 51.22% 41.94% 58.06%
+Relevance 49.60% 50.40% 47.58% 52.42% 45.53% 54.47% 52.89% 47.11% 53.66% 46.34% 35.48% 64.52%
+Coherence 52.89% 47.11% 47.15% 52.85% 52.42% 47.58% 51.20% 48.80% 52.89% 47.11% 42.74% 57.26%
+query phase, it uses an LLM to generate a hypothet-
+ical document based on the question, which is then
+used to retrieve relevant text chunks and generate
+the final answer.
+•GraphRAG : This is a graph-based RAG. It
+uses an LLM to extract entities and relationships
+from the text, representing them as nodes and
+edges, with descriptions from the original text at-
+tached as features to reduce information loss. For
+each question, a community detection algorithm
+is applied to summarize and generalize the infor-
+mation contained in the nodes from the bottom
+up, forming new community descriptions. Finally,
+the results of the community detection are used to
+answer global summarization questions.
+•LightRAG : This is also a graph-based RAG,
+inheriting the graph construction method men-
+tioned in GraphRAG. However, considering the
+high cost of retrieval in GraphRAG, LightRAG
+cleverly employs a dual-level retrieval framework,
+performing more detailed and precise searches in
+the graph at both local and global levels, signifi-
+cantly reducing token and time consumption.
+C Evaluation Dimensions
+LLM will evaluate RAG responses based on the
+following five dimensions:
+•Comprehensiveness: How much detail does
+the answer provide to cover all aspects and details
+of the question?
+•Diversity: How varied and rich is the answer
+in providing different perspectives and insights on
+the question?
+•Logicality: How logically does the answer
+respond to all parts of the question?
+•Relevance: How relevant is the answer to the
+question, staying focused and addressing the in-tended topic or issue?
+•Coherence: How well does the answer main-
+tain internal logical connections between its parts,
+ensuring a smooth and consistent structure?
+D Details of Ablated Variants
+D.1 Path Ordering
+•Random ordering . We randomly select Kpaths
+and place them into the prompt.
+•Hop-first ordering . Paths are sorted based
+on the number of hops. Paths with fewer hops are
+considered to have more direct relevance. Within
+the same hop count, paths are randomly ordered.
+Finally, Kpaths are selected and arranged in as-
+cending order, placing the most important paths at
+the end of the prompt to enhance memory retention.
+D.2 Prompt Format
+•Flat organization . In this setting, the retrieved
+paths are decomposed into individual nodes and
+edges. The order of nodes and edges is randomized
+and not structured based on their original paths.
+E Detailed Comparison between
+PathRAG-lt and LightRAG
+Table 5 presents the win rates of PathRAG-lt
+against LightRAG on six datasets. PathRAG-lt
+has an overall win rate of 50.69%.
+F Additional Case study
+We also provide an additional case study compar-
+ing PathRAG and LightRAG on the CS dataset.
+Given the question, “What derived features should
+be considered to enhance the dataset’s predictive
+power? ”, both LightRAG and PathRAG generate
+responses based on the retrieved text. These re-
+sponses are then evaluated by GPT-4o-mini across
+12
+Figure 5: Case study comparing the answers generated by PathRAG and the best baseline LightRAG on the CS
+dataset.
+five dimensions, with justifications provided, as
+shown in Figure 5. We highlight the key points
+in the answers in bold, with LLM justification for
+winning judgments displayed in blue and losing
+judgments in purple. The case study demonstrates
+that our proposed path information retrieval method
+provides comprehensive support for answer genera-
+tion. PathRAG exhibits clear advantages in all five
+dimensions.
+13
